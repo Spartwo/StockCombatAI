@@ -40,15 +40,9 @@ namespace KerbalCombatSystems
         public override void Setup()
         {
             controller = part.FindModuleImplementing<ModuleWeaponController>();
-
             if (controller.target == null && vessel.targetObject == null) return;
-            target = controller.target ?? vessel.targetObject.GetVessel();
-            firingInterval = controller.firingInterval;
-            fireCountdown = controller.fireCountdown;
-            fireSymmetry = controller.fireSymmetry;
-            accuracyTolerance = controller.accuracyTolerance;
 
-            Debug.Log("[KCS]: decoupler is valid");
+            UpdateSettings();
             NextRocket();
 
             leadLine = KCSDebug.CreateLine(Color.green);
@@ -56,9 +50,24 @@ namespace KerbalCombatSystems
                 prediction = CreateSphere();
         }
 
+        public override void UpdateSettings()
+        {
+            target = controller.target ?? vessel.targetObject.GetVessel();
+            firingInterval = controller.firingInterval;
+            fireCountdown = controller.fireCountdown;
+            fireSymmetry = controller.fireSymmetry;
+            accuracyTolerance = controller.accuracyTolerance;
+        }
+
         public override Vector3 Aim()
         {
-            if (decouplers.Count < 1 || decoupler == null || decoupler.part.vessel != vessel || target == null)
+            if (decoupler == null || decoupler.part.vessel != vessel)
+            {
+                NextRocket();
+                return Vector3.zero;
+            }
+
+            if (decouplers.Count < 1 || target == null)
                 return Vector3.zero;
 
             float timeSinceLastCalculated = Time.time - lastCalculated;
@@ -82,11 +91,7 @@ namespace KerbalCombatSystems
 
             KCSDebug.PlotLine(new Vector3[] { origin, origin + leadVector }, leadLine);
 
-            // Scale the accuracy requirement (in degrees) based on the distance and size of the target.
-            Vector3 targetRadius = Vector3.ProjectOnPlane(Vector3.up, targetVector.normalized).normalized * (controller.targetSize / 2) * accuracyTolerance;
-            float aimTolerance = Vector3.Angle(targetVector, targetVector + targetRadius);
-
-            bool onTarget = Vector3.Angle(leadVector.normalized, decoupler.transform.up) < aimTolerance;
+            bool onTarget = OnTarget(leadVector.normalized, decoupler.transform.up, targetVector, controller.targetSize, accuracyTolerance);
             if (onTarget)
             {
                 // We must remain on target for fireCountdown seconds before we can fire.
@@ -110,7 +115,7 @@ namespace KerbalCombatSystems
                     // Create a static pink ball where the hit is predicted to happen.
                     if (KCSDebug.showLines)
                     {
-                        GameObject prediction = CreateSphere();
+                        GameObject prediction = CreateSphere(timeToHit + 5);
                         prediction.transform.position = origin + leadVector;
                     }
                 }
@@ -142,7 +147,8 @@ namespace KerbalCombatSystems
             foreach (var p in rocketParts)
             {
                 eng = p.FindModuleImplementing<ModuleEngines>();
-                if (eng == null) continue;
+                if (eng == null)
+                    continue;
 
                 engines.Add(eng);
 
@@ -153,7 +159,7 @@ namespace KerbalCombatSystems
             if (engines.Count < 1)
                 return -1;
 
-            Vector3 thrustVector = GetFireVector(engines, origin) * -1;
+            Vector3 thrustVector = GetFireVector(engines) * -1;
             aimVector = thrustVector.normalized;
 
             float thrust = Vector3.Dot(thrustVector, decoupler.transform.up);
@@ -255,7 +261,7 @@ namespace KerbalCombatSystems
 
         private void NextRocket()
         {
-            decouplers = FindDecouplerChildren(part.parent, "Default", false);
+            decouplers = FindDecouplerChildren(part.parent);
             if (decouplers.Count < 1)
             {
                 controller.canFire = false;
@@ -264,34 +270,28 @@ namespace KerbalCombatSystems
 
             decoupler = decouplers.Last();
             controller.aimPart = decoupler.part;
-            //AssignReference(decoupler.part.GetReferenceTransform(), aimVector);
         }
 
-        private void AssignReference(Transform Position, Vector3 Direction)
+        public void OnDestroy()
         {
-            Quaternion q = Quaternion.FromToRotation(Vector3.right, aimVector);
-            Transform t = decoupler.part.GetReferenceTransform();
-            t.transform.rotation = Quaternion.LookRotation(aimVector);
-            decoupler.part.SetReferenceTransform(t);
-            controller.aimPart = decoupler.part;
+            KCSDebug.DestroyLine(leadLine);
+            Destroy(prediction);
         }
 
-        public void OnDestroy() =>
-            KCSDebug.DestroyLine(leadLine);
-
-        private GameObject CreateSphere()
+        private GameObject CreateSphere(float deleteAfter = 0)
         {
             GameObject prediction = GameObject.CreatePrimitive(PrimitiveType.Sphere);
             var mr = prediction.GetComponent<MeshRenderer>();
 
             Material sphereMat = new Material(Shader.Find("Unlit/Color"));
-            sphereMat.color = Color.magenta;
-
+            sphereMat.color = new Color(1f, 0f, 1f, 0.4f);
             mr.material = sphereMat;
 
-            //todo sphere doesn't destroy
             prediction.transform.localScale = prediction.transform.localScale * 2;
             Destroy(prediction.GetComponent<SphereCollider>());
+
+            if (deleteAfter > 0)
+                Destroy(prediction, deleteAfter);
 
             return prediction;
         }
